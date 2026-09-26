@@ -78,3 +78,40 @@ O número melhorou, mas a leitura do número disse que o plano original estava e
 Com isso `config` deixa de existir, e o `tickets` concreto vira `adapters/tickets_file.py`, implementando a porta `TicketSource`.
 
 **Critério de pronto revisado:** além dos itens da seção 1, nenhum componente de feature importa `adapters.*`, e `config` não existe mais.
+
+## 4. Handoff para o agente de IA (escala)
+
+**Agente:** Claude Code (subagente `general-purpose`), rodando no mesmo repositório, com acesso a shell e ao compose no ar. O piloto foi feito por mim (arquiteto); a escala foi entregue ao agente.
+
+**O que entreguei ao agente:**
+
+- as seções 1 a 3 deste plano, com a instrução explícita de executar a **revisão** da seção 3, não o plano original;
+- a estrutura alvo, arquivo por arquivo: `ports.py` só com Protocols (`LanguageModel`, `TicketSource`), `adapters/gateway.py` como único usuário do SDK, `adapters/tickets_file.py`, features recebendo dependências por parâmetro e com a própria constante `CAPABILITY`, `main.py` como ponto de composição, e a remoção de `llm.py`, `config.py` e `tickets.py`;
+- as restrições: não tocar em `tests/`, `provider-fake/`, `edge/`, `data/`, `gateway/`, `compose.yaml`, `metrics/`, `docs/`; nenhum nome físico nem chave em `app/`; não commitar;
+- os quatro juízes, com os comandos exatos, que ele devia rodar antes de devolver: rebuild do `app`, suíte de caracterização (15 passed; "se falhar, conserte o app, nunca os testes"), script de métrica (nenhum componente na zona de dor exceto `schemas`; `adapters.gateway` com I ≥ 0,5) e grep de `adapters` nas features (vazio).
+
+**Como a métrica e os testes decidiram o aceite.** O relatório do agente não foi aceito pela palavra dele: repeti os juízes de forma independente depois que ele terminou.
+
+| juiz | resultado reportado | resultado na minha reexecução |
+|---|---|---|
+| `pytest tests/characterization -q` | 15 passed | 15 passed |
+| `/admin/calls` depois de F3 e F4 | não pedido | `claude-fake-large topics 200`, `gpt-fake-large extract 200`: as chamadas chegam pelo gateway aos `large` |
+| métrica | só `schemas` na zona de dor | idem (tabela abaixo) |
+| `grep adapters` nas features / `grep gpt-fake\|claude-fake\|FAKE_` em `app/` | vazio | vazio |
+
+Também li o diff inteiro: o agente não mudou prompt, ordem de lotes, validações nem status HTTP; as únicas decisões dele foram docstrings curtas e um comentário marcando o ponto de composição. Aceito sem retrabalho. Se algum juiz falhasse, a instrução era devolver o diff ao agente com a saída do juiz, e não ajustar teste ou régua.
+
+## 5. Medição da v2-decoupled
+
+`metrics/results/v2-decoupled.csv`:
+
+| componente | Ca | Ce | I | A | D |
+|---|---|---|---|---|---|
+| ports | 6 | 0 | 0,00 | 1,00 | 0,00 |
+| adapters.gateway | 1 | 1 | 0,50 | 0,00 | 0,50 |
+| adapters.tickets_file | 1 | 1 | 0,50 | 0,00 | 0,50 |
+| classification, extraction, suggestion, report | 1 | 2 | 0,67 | 0,00 | 0,33 |
+| main | 0 | 7 | 1,00 | 0,00 | 0,00 |
+| schemas | 5 | 0 | 0,00 | 0,00 | 1,00 |
+
+Critério de pronto: atendido. O fan-in que antes estava em `config` (Ca=6) e `llm` (Ca=4), dois módulos concretos, agora está em `ports` (Ca=6), que é totalmente abstrato (A=1, D=0): quem é muito usado é o que menos muda. `schemas` segue como exceção declarada (ADR da métrica). `adapters.gateway` ficou no limite (I=0,5): o próximo passo (requisito 5/6, na `main`) faz o adapter traduzir erros do SDK para exceções da porta, o que é uma necessidade funcional (fallback explícito, evento de erro no stream), não um ajuste para a fórmula.
