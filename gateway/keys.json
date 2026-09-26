@@ -1,0 +1,7 @@
+[
+  {
+    "key_alias": "helpdesk-app",
+    "key_env": "HELPDESK_GATEWAY_KEY",
+    "models": ["ticket-classifier", "reply-writer", "topic-analyzer", "order-extractor"]
+  }
+]

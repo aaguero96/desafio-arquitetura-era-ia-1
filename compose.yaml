@@ -15,9 +15,68 @@ services:
       app:
         condition: service_healthy
 
+  # AI Gateway: único lugar que conhece providers, modelos físicos e suas chaves.
+  gateway:
+    image: ghcr.io/berriai/litellm:v1.102.1
+    command: ["--config", "/gateway/config.yaml", "--port", "4000"]
+    environment:
+      FAKE_OPENAI_KEY: ${FAKE_OPENAI_KEY}
+      FAKE_ANTHROPIC_KEY: ${FAKE_ANTHROPIC_KEY}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      DATABASE_URL: postgresql://litellm:litellm@gateway-db:5432/litellm
+      # Nada de rede externa: usa o mapa de custos embutido e não envia telemetria.
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      LITELLM_TELEMETRY: "False"
+    volumes:
+      - ./gateway:/gateway:ro
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+    depends_on:
+      gateway-db:
+        condition: service_healthy
+      provider-fake:
+        condition: service_healthy
+
+  # Banco do gateway: guarda chaves virtuais, gasto acumulado e orçamentos (ADR 0007).
+  gateway-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Cria as chaves virtuais declaradas em gateway/keys.json e termina (ADR 0007).
+  gateway-init:
+    image: ghcr.io/berriai/litellm:v1.102.1
+    entrypoint: ["python", "/gateway/provision.py"]
+    environment:
+      GATEWAY_URL: http://gateway:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      HELPDESK_GATEWAY_KEY: ${HELPDESK_GATEWAY_KEY}
+    volumes:
+      - ./gateway:/gateway:ro
+    restart: "no"
+    depends_on:
+      gateway:
+        condition: service_healthy
+
   app:
     build: ./app
-    env_file: .env
+    # Sem env_file: a aplicação não recebe as chaves dos providers, só a do gateway.
+    environment:
+      GATEWAY_URL: http://gateway:4000
+      GATEWAY_API_KEY: ${HELPDESK_GATEWAY_KEY}
     volumes:
       - ./data:/data:ro
     healthcheck:
@@ -26,5 +85,5 @@ services:
       timeout: 3s
       retries: 20
     depends_on:
-      provider-fake:
-        condition: service_healthy
+      gateway-init:
+        condition: service_completed_successfully
