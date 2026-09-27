@@ -115,3 +115,11 @@ Também li o diff inteiro: o agente não mudou prompt, ordem de lotes, validaç�
 | schemas | 5 | 0 | 0,00 | 0,00 | 1,00 |
 
 Critério de pronto: atendido. O fan-in que antes estava em `config` (Ca=6) e `llm` (Ca=4), dois módulos concretos, agora está em `ports` (Ca=6), que é totalmente abstrato (A=1, D=0): quem é muito usado é o que menos muda. `schemas` segue como exceção declarada (ADR da métrica). `adapters.gateway` ficou no limite (I=0,5): o próximo passo (requisito 5/6, na `main`) faz o adapter traduzir erros do SDK para exceções da porta, o que é uma necessidade funcional (fallback explícito, evento de erro no stream), não um ajuste para a fórmula.
+
+## 6. Depois da tag: o que a `main` mudou na estrutura
+
+A `main` evoluiu o contrato (streaming na F2, assíncrono na F3, resiliência no gateway), não a arquitetura:
+
+- `ports.LanguageModel` ganhou `stream()` e o parâmetro `timeout` (o orçamento de latência é da feature, não do adapter), e `ports` ganhou `ModelUnavailable` e `GenerationInterrupted`. O adapter traduz os erros do SDK para essas exceções; features e ponto de composição nunca veem uma exceção do `openai`.
+- Entrou `jobs.py` (estado das tarefas assíncronas, ADR 0010).
+- Medição (`metrics/results/main.csv`): nenhum componente na zona de dor além de `schemas`. `ports` foi de A=1,0 para 0,5 por causa das duas exceções, e continua fora da zona. `jobs`, como os adapters, ficou em I=0,5.

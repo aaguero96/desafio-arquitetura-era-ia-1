@@ -1,53 +1,96 @@
 # Configuração do AI Gateway (LiteLLM Proxy).
 #
 # A aplicação só conhece as capacidades lógicas (model_name). Qual modelo físico
-# atende cada capacidade é decidido aqui. Para trocar o modelo de uma capacidade,
-# altere o `model` dela e rode `docker compose restart gateway`.
+# atende cada capacidade é decidido aqui.
 #
-# Preços por token copiados do README do provider-fake: sem eles o LiteLLM
-# calcula custo zero e nenhum orçamento estoura.
+# TROCAR O MODELO DE UMA CAPACIDADE: na entrada da capacidade em model_list,
+# troque a âncora (ex.: `<<: *gpt-fake-large` por `<<: *gpt-fake-mini`) e rode
+# `docker compose restart gateway`. A aplicação não é reconstruída nem reiniciada.
 
+# Modelos físicos, declarados uma vez. Preços por token copiados do README do
+# provider-fake: sem eles o LiteLLM calcula custo zero e nenhum orçamento estoura.
+physical_models:
+  gpt-fake-large: &gpt-fake-large
+    model: openai/gpt-fake-large
+    api_base: http://provider-fake:8090/openai/v1
+    api_key: os.environ/FAKE_OPENAI_KEY
+    input_cost_per_token: 0.0000025
+    output_cost_per_token: 0.00001
+  gpt-fake-mini: &gpt-fake-mini
+    model: openai/gpt-fake-mini
+    api_base: http://provider-fake:8090/openai/v1
+    api_key: os.environ/FAKE_OPENAI_KEY
+    input_cost_per_token: 0.00000015
+    output_cost_per_token: 0.0000006
+  claude-fake-large: &claude-fake-large
+    model: anthropic/claude-fake-large
+    api_base: http://provider-fake:8090/anthropic
+    api_key: os.environ/FAKE_ANTHROPIC_KEY
+    input_cost_per_token: 0.000003
+    output_cost_per_token: 0.000015
+  claude-fake-mini: &claude-fake-mini
+    model: anthropic/claude-fake-mini
+    api_base: http://provider-fake:8090/anthropic
+    api_key: os.environ/FAKE_ANTHROPIC_KEY
+    input_cost_per_token: 0.0000008
+    output_cost_per_token: 0.000004
+
+# Cada capacidade tem até três destinos, na ordem do fallback:
+#   <capacidade>        primário
+#   <capacidade>-alt    fallback técnico: modelo equivalente (large) no outro provider
+#   <capacidade>-weak   fallback com modelo fraco (mini), só onde o ADR 0005 permite
+# timeout: tempo máximo de uma tentativa sem resposta (sem streaming).
+# stream_timeout: tempo máximo de espera por dados numa resposta em streaming.
 model_list:
-  # F1 Classificar ticket
+  # F1 Classificar ticket (síncrona; saída curta: ~1,2 s no large)
   - model_name: ticket-classifier
-    litellm_params:
-      model: openai/gpt-fake-large
-      api_base: http://provider-fake:8090/openai/v1
-      api_key: os.environ/FAKE_OPENAI_KEY
-      input_cost_per_token: 0.0000025
-      output_cost_per_token: 0.00001
+    litellm_params: {<<: *gpt-fake-large, timeout: 4}
+  - model_name: ticket-classifier-alt
+    litellm_params: {<<: *claude-fake-large, timeout: 4}
+  - model_name: ticket-classifier-weak
+    litellm_params: {<<: *gpt-fake-mini, timeout: 4}
 
-  # F2 Sugerir resposta
+  # F2 Sugerir resposta (streaming; primeiro token em ~0,8 s no large)
   - model_name: reply-writer
-    litellm_params:
-      model: anthropic/claude-fake-large
-      api_base: http://provider-fake:8090/anthropic
-      api_key: os.environ/FAKE_ANTHROPIC_KEY
-      input_cost_per_token: 0.000003
-      output_cost_per_token: 0.000015
+    litellm_params: {<<: *claude-fake-large, timeout: 30, stream_timeout: 4}
+  - model_name: reply-writer-alt
+    litellm_params: {<<: *gpt-fake-large, timeout: 30, stream_timeout: 4}
+  - model_name: reply-writer-weak
+    litellm_params: {<<: *claude-fake-mini, timeout: 30, stream_timeout: 4}
 
-  # F3 Relatório de temas
+  # F3 Relatório de temas (assíncrona; ~10 s por lote de 150 tickets no large)
   - model_name: topic-analyzer
-    litellm_params:
-      model: anthropic/claude-fake-large
-      api_base: http://provider-fake:8090/anthropic
-      api_key: os.environ/FAKE_ANTHROPIC_KEY
-      input_cost_per_token: 0.000003
-      output_cost_per_token: 0.000015
+    litellm_params: {<<: *claude-fake-large, timeout: 20}
+  - model_name: topic-analyzer-alt
+    litellm_params: {<<: *gpt-fake-large, timeout: 20}
+  - model_name: topic-analyzer-weak
+    litellm_params: {<<: *claude-fake-mini, timeout: 20}
 
-  # F4 Extrair dados do pedido
+  # F4 Extrair dados do pedido (síncrona; SEM modelo fraco, ver ADR 0005)
   - model_name: order-extractor
-    litellm_params:
-      model: openai/gpt-fake-large
-      api_base: http://provider-fake:8090/openai/v1
-      api_key: os.environ/FAKE_OPENAI_KEY
-      input_cost_per_token: 0.0000025
-      output_cost_per_token: 0.00001
+    litellm_params: {<<: *gpt-fake-large, timeout: 4}
+  - model_name: order-extractor-alt
+    litellm_params: {<<: *claude-fake-large, timeout: 4}
+
+router_settings:
+  # Retry fica só no gateway (a aplicação usa max_retries=0), com backoff
+  # exponencial do LiteLLM entre tentativas do mesmo destino.
+  num_retries: 2
+  retry_policy:
+    InternalServerErrorRetries: 2   # 5xx: transitório
+    RateLimitErrorRetries: 2        # 429: transitório, respeita Retry-After
+    TimeoutErrorRetries: 0          # travado: esperar de novo estoura o orçamento de latência
+    BadRequestErrorRetries: 0
+    AuthenticationErrorRetries: 0
+    ContentPolicyViolationErrorRetries: 0
+  # Sem cooldown: todo pedido tenta o primário primeiro (circuit breaker fora de escopo).
+  disable_cooldowns: true
+  fallbacks:
+    - ticket-classifier: [ticket-classifier-alt, ticket-classifier-weak]
+    - reply-writer: [reply-writer-alt, reply-writer-weak]
+    - topic-analyzer: [topic-analyzer-alt, topic-analyzer-weak]
+    - order-extractor: [order-extractor-alt]
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
-
-router_settings:
-  # Retry fica só no gateway: a aplicação usa o SDK com max_retries=0.
-  num_retries: 0

@@ -2,6 +2,23 @@
   {
     "key_alias": "helpdesk-app",
     "key_env": "HELPDESK_GATEWAY_KEY",
-    "models": ["ticket-classifier", "reply-writer", "topic-analyzer", "order-extractor"]
+    "models": ["ticket-classifier", "reply-writer", "topic-analyzer", "order-extractor"],
+    "max_budget": 50.0,
+    "budget_duration": "30d",
+    "rpm_limit": 600
+  },
+  {
+    "key_alias": "demo-budget",
+    "key_env": "DEMO_BUDGET_KEY",
+    "models": ["ticket-classifier"],
+    "max_budget": 0.0001,
+    "spend": 0
+  },
+  {
+    "key_alias": "demo-rpm",
+    "key_env": "DEMO_RPM_KEY",
+    "models": ["ticket-classifier"],
+    "rpm_limit": 1,
+    "spend": 0
   }
 ]

@@ -64,6 +64,8 @@ services:
       GATEWAY_URL: http://gateway:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       HELPDESK_GATEWAY_KEY: ${HELPDESK_GATEWAY_KEY}
+      DEMO_BUDGET_KEY: ${DEMO_BUDGET_KEY}
+      DEMO_RPM_KEY: ${DEMO_RPM_KEY}
     volumes:
       - ./gateway:/gateway:ro
     restart: "no"

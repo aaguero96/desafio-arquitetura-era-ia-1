@@ -2,8 +2,15 @@
 
 Não dizem o que o sistema deveria fazer; dizem o que ele faz. Qualquer mudança
 aqui é mudança de comportamento, não refatoração.
+
+Na main, F2 e F3 mudaram de modo de entrega (streaming e assíncrono, ADR 0008).
+Os testes delas foram atualizados para o contrato novo, mas o resultado continua
+fixado pelos mesmos snapshots da v1-coupled: o texto e o relatório não mudaram.
+A versão antiga da suíte segue nas tags v1-coupled e v2-decoupled.
 """
 import pytest
+
+from support import read_sse, run_report
 
 ATRASO = "Meu pedido #481516 não chegou e já passou do prazo, urgente"
 NOTA_E_PEDIDO = ("Tenho aqui a nota fiscal 530720. O produto veio quebrado na caixa, "
@@ -38,10 +45,14 @@ def test_f1_rejeita_ticket_sem_texto(client):
 
 # F2 Sugerir resposta
 
-def test_f2_sugere_resposta(client, snapshot):
-    response = client.post("/tickets/reply-suggestion", json={"ticket_id": "TK-00042", "text": ATRASO})
+def test_f2_sugere_resposta_em_stream(client, snapshot):
+    response, events = read_sse(client, "/tickets/reply-suggestion", {"ticket_id": "TK-00042", "text": ATRASO})
     assert response.status_code == 200
-    assert response.json() == snapshot("f2_suggestion_TK-00042.json")
+    assert response.headers["content-type"].startswith("text/event-stream")
+    chunks = [data["chunk"] for name, data in events[:-1]]
+    assert len(chunks) > 1
+    assert events[-1] == ("end", {"ticket_id": "TK-00042"})
+    assert {"ticket_id": "TK-00042", "suggestion": "".join(chunks)} == snapshot("f2_suggestion_TK-00042.json")
 
 
 def test_f2_rejeita_ticket_sem_id(client):
@@ -55,15 +66,18 @@ def test_f2_rejeita_ticket_sem_id(client):
 # F3 Relatório de temas
 
 def test_f3_relatorio_de_um_dia(client, snapshot):
-    response = client.post("/reports/topics", json={"start": "2026-08-01", "end": "2026-08-01"})
-    assert response.status_code == 200
-    assert response.json() == snapshot("f3_report_2026-08-01.json")
+    accepted, final = run_report(client, {"start": "2026-08-01", "end": "2026-08-01"})
+    assert accepted.status_code == 202
+    assert accepted.headers["location"].startswith("/reports/topics/status/")
+    assert accepted.headers["retry-after"] == "5"
+    assert final.status_code == 200
+    assert final.json() == snapshot("f3_report_2026-08-01.json")
 
 
 def test_f3_periodo_sem_tickets(client):
-    response = client.post("/reports/topics", json={"start": "2026-09-01", "end": "2026-09-30"})
-    assert response.status_code == 200
-    assert response.json() == {"start": "2026-09-01", "end": "2026-09-30", "total_tickets": 0, "topics": []}
+    accepted, final = run_report(client, {"start": "2026-09-01", "end": "2026-09-30"})
+    assert accepted.status_code == 202
+    assert final.json() == {"start": "2026-09-01", "end": "2026-09-30", "total_tickets": 0, "topics": []}
 
 
 def test_f3_rejeita_periodo_invertido(client):
